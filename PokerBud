@@ -1,0 +1,569 @@
+######################################################
+# Importing os module to be able to manipulate files #
+######################################################
+
+import os
+import time
+
+###############################################################################
+# This procedure creates a list called list_of_files and using os mudule's    #
+# functions, assigns all the filenames in current directory to that list.     #
+# Later it cycles through the filenames using 'for' and categorises them by   #
+# gametype. It uses filename to recognise the hand history files and their    #
+# contents to recognise the gametype.There are two gametypes involved in this #
+# program: tournaments and zoom games. It returns a dictionary, which keys    #
+# are gametypes, and values are filenames.                                    #                                                                #
+###############################################################################
+
+def reload_filelist():
+    list_of_files = os.listdir( os.getcwd() )
+    filelist = {}
+    filelist['tournaments'] = []
+    filelist['zoomgames'] = []
+    filelist['all'] = []
+    for filename in list_of_files:
+        open_file = open(filename, 'r')
+        input_file = open_file.read()
+        if input_file.find('Tournament') != -1 and filename[0:2] == 'HH':
+            filelist['tournaments'].append(filename)
+        elif input_file.find('Zoom Hand') != -1 and filename[0:2] == 'HH':
+            filelist['zoomgames'].append(filename)
+        if filename[0:2] == 'HH':
+            filelist['all'].append(filename)
+        open_file.close()
+    return filelist
+
+###############################################################################
+# This procedure builds a database of all different players(as keywords)and   #
+# some of their playing statistics(as values) found in hand history files.    #
+###############################################################################
+
+def build_db(filelist, gametype):
+    nr_of_hands = 0
+    db = {}
+# This cycles through all files in filelist
+    for filename in filelist[gametype]:
+# This prints a filename of current file and extracts hands of a file as a list
+        print filename
+        hands = hands_in_file(filename)
+# This cycles through hands in current file
+        for hand in hands:
+                nr_of_hands = nr_of_hands + 1
+# The folowing procedures do the database builing.
+                count_players(db, hands[hand])
+                players = who_is_playing(hands[hand])
+                count_all_hands(players, db)
+                preflop, flop, turn, river, show, summary = extract_streets(hands[hand])             
+                calculate_VPIP_hands(preflop, db)
+                calculate_PFR_hands(preflop, db)
+                calculate_AFq_hands(flop, turn, river, db)
+                calculate_WTSD_hands(show, db)
+                calculate_WTFLOP_hands(flop, db)
+                calculate_CBET_hands(preflop, flop, db)
+                won_showdown(show, db)
+# build_db returns the database with player names as keywords and dictionaries,
+# which keywords are names for a different statistic and values are the numbers
+# calculated by procedures, as values(I hope this makes sense to You :D).
+# build_db also returns the number of hands analyzed.
+    return db, nr_of_hands
+
+###############################################################################
+# This procedure opens a file, extracts all hands stored in that file and     #
+# returns them in a dictionary, where hand number is the keyword and the hand #
+# itself is the value.                                                        #
+###############################################################################
+
+def hands_in_file(filename):
+    open_file = open(filename, 'r')
+    input_file = open_file.read()
+    hands = {}
+    eof = 0
+    while eof != 1:
+        hand_begins = input_file.find('Hand #')
+        hand_number_begins = hand_begins + 6 # +6, because 'Hand #' is six symbols
+        hand_number_ends = input_file.find(': ', hand_number_begins)
+        hand_ends = input_file.find('Hand #', hand_number_ends)
+        if len(input_file[hand_number_begins:hand_number_ends]) == 11:# 11, because hand number lenght is 11 symbols
+            hands[input_file[hand_number_begins:hand_number_ends]] = input_file[hand_begins-11:hand_ends - 18]
+        input_file = input_file[hand_ends - 15:]
+        if hand_begins == -1:
+            eof = 1
+    open_file.close()
+    return hands
+
+###############################################################################
+# count_players modifies the currently empty database variable 'db' to contain#
+# all different players found in hand as keywords.                            #
+###############################################################################
+
+def count_players(db, hand):
+    lines_of_hand = hand.splitlines()
+    if len(lines_of_hand)>2:
+# The range is (2, 12), because the list of players in a hand starts on the
+# 3rd line and it's up to 10 players
+        for i in range(2, 12):
+            current_line = lines_of_hand[i]
+            if current_line[0:5] == 'Seat ':
+                name_begins = current_line.find(': ') + 2
+                name_ends = current_line[name_begins+2:].find(' (')
+                name = current_line[name_begins:name_begins+name_ends+2]
+# I current name is not in database it adds
+# 'name' : { 'stat1' : value, 'stat2' : value, ...} to the db dictionary
+                if name not in db:
+                    db[name] = {'hands_played' : 0,
+                                'VPIP_hands' : 0,
+                                'VPIP' : 0,
+                                'PFR_hands' : 0,
+                                'PFR' : 0,
+                                'POST_FLOP_AGG' : 0,
+                                'POST_FLOP_PASSIVE' : 0,
+                                'AFq' : 0,
+                                'WTSD_HANDS' : 0,
+                                'WTSD_PERCENTAGE' : 0,
+                                'WTFLOP_HANDS' : 0,
+                                'CBET_HANDS' : 0,
+                                'last_to_raise_preflop' : 0,
+                                'CBET' : 0,
+                                'won_showdown' : 0,
+                                'won_showdown_percentage' : 0,
+                                }
+
+###############################################################################
+# who_is_playing returns a list of players playing in current hand.           #
+###############################################################################
+
+def who_is_playing(hand):
+    players = []
+    lines_of_hand = hand.splitlines()
+    if len(lines_of_hand)>2:
+        for i in range(1, 11):
+            current_line = lines_of_hand[1+i]
+            if current_line[0:5] == 'Seat ':
+                name_begins = current_line.find(': ') + 2
+                name_ends = current_line[name_begins+2:].find(' (')
+                name = current_line[name_begins:name_ends+name_begins+2]
+                players.append(name)
+    return players
+
+###############################################################################
+# count_all_hands adds 1 to the db['name of a player'][hands_played] for every#
+# player found in variable players.                                           #  
+###############################################################################
+
+def count_all_hands(players,db):
+    for player in players:
+        db[player]['hands_played'] = db[player]['hands_played'] + 1
+
+###############################################################################
+# extract_streets extracts different game phases from every hand.             #
+###############################################################################
+
+def extract_streets(hand):
+# Proceures that are defined to extract phases of a poker hand.
+    preflop = extract_preflop(hand)
+    flop = extract_flop(hand)
+    turn = extract_turn(hand)
+    river = extract_river(hand)
+    show = extract_show(hand)
+    summary = extract_summary(hand)
+# Returns phases of a poker hand.
+    return preflop, flop, turn, river, show, summary
+
+###############################################################################
+# extract_preflop extracts preflop phase of the hand.                         #
+###############################################################################
+    
+def extract_preflop(hand):
+    preflop_pos = hand.find('*** HOLE CARDS ***') + 18
+    preflop_end = hand.find('*** FLOP ***')
+    if preflop_end == -1:
+        preflop_end = hand.find('*** SUMMARY ***')
+    hand = hand[preflop_pos:preflop_end]
+    lines_of_hand = hand.splitlines(True)
+    preflop_list = lines_of_hand[2:]
+    preflop = ''.join(preflop_list)
+    return preflop
+
+###############################################################################
+# extract_flop extracts flop phase of the hand.                               #
+###############################################################################
+
+def extract_flop(hand):
+    flop_pos = hand.find('*** FLOP ***') + 12
+    if flop_pos-12 == -1:
+        return 'none'
+    flop_end = hand.find('*** TURN ***')
+    if flop_end == -1:
+        flop_end = hand.find('*** SUMMARY ***')
+    hand = hand[flop_pos:flop_end]
+    lines_of_hand = hand.splitlines(True)
+    flop_list = lines_of_hand[1:]
+    flop = ''.join(flop_list)
+    return flop
+
+###############################################################################
+# extract_turn extracts turn phase of the hand.                               #
+###############################################################################
+
+def extract_turn(hand):
+    turn_pos = hand.find('*** TURN ***') + 12 # 12 is the lenght of string '*** TURN ***'
+    if turn_pos-12 == -1:
+        return 'none'
+    turn_end = hand.find('*** RIVER ***')
+    if turn_end == -1:
+        turn_end = hand.find('*** SUMMARY ***')
+    hand = hand[turn_pos:turn_end]
+    lines_of_hand = hand.splitlines(True)
+    turn_list = lines_of_hand[1:]
+    turn = ''.join(turn_list)
+    return turn
+
+###############################################################################
+# extract_river extracts river phase of the hand.                             #
+###############################################################################
+
+def extract_river(hand):
+    river_pos = hand.find('*** RIVER ***') + 13 # 13 is the lenght of string '*** RIVER ***'
+    if river_pos-13 == -1:
+        return 'none'
+    river_end = hand.find('*** SHOW DOWN ***')
+    if river_end == -1:
+        river_end = hand.find('*** SUMMARY ***')
+    hand = hand[river_pos:river_end]
+    lines_of_hand = hand.splitlines(True)
+    river_list = lines_of_hand[1:]
+    river = ''.join(river_list)
+    return river
+
+###############################################################################
+# extract_show extracts show down phase of the hand.                          #
+###############################################################################
+
+def extract_show(hand):
+    show_pos = hand.find('*** SHOW DOWN ***') + 17 # 17 is the lenght of string '*** SHOW DOWN ***'
+    if show_pos-17 == -1:
+        return 'none'
+    show_end = hand.find('*** SUMMARY ***')
+    if show_end == -1:
+        show_end = hand.find('*** SUMMARY ***')
+    hand = hand[show_pos:show_end]
+    lines_of_hand = hand.splitlines(True)
+    show_list = lines_of_hand[1:]
+    show = ''.join(show_list)
+    return show
+
+###############################################################################
+# extract_summary extracts summary of the hand.                               #
+###############################################################################
+
+def extract_summary(hand):
+    summary_pos = hand.find('*** SUMMARY ***') +15# 15 is the lenght of string '*** SUMMARY ***'
+    if summary_pos - 15 == -1:
+        return 'none'
+    hand = hand[summary_pos:]
+    lines_of_hand = hand.splitlines(True)
+    summary_list = lines_of_hand[1:]
+    summary = ''.join(summary_list)
+    return summary
+
+
+
+###############################################################################
+# calculate_VPIP_hands calculates the amount of hands for each player, when   #
+# money was voluntarily put into pot(hence the name - VPIP).                  # 
+###############################################################################
+
+def calculate_VPIP_hands(preflop, db):
+    lines = preflop.splitlines()
+    for line in lines:
+        action_pos = line.find(': ')
+        if action_pos != -1:
+            action_end = line[action_pos+2:].find(' ')
+            action = line[action_pos+2:action_pos+2+action_end]
+# A call or a raise is considered a voluntary action to put money into pot
+            if action == 'calls' or action == 'raises':
+                name = line[:action_pos]
+                if name not in db:
+                    parenthesis_start = name.find(' (')
+                    name = name[:parenthesis_start]
+                db[name]['VPIP_hands']=db[name]['VPIP_hands'] + 1
+
+###############################################################################
+# calculate_PFR_hands calculates the amount of hands for each player, when    #
+# a player performs a pre flop raise(hence the name - PFR).                   #
+###############################################################################
+
+def calculate_PFR_hands(preflop, db):
+    lines = preflop.splitlines()
+    for line in lines:
+        action_pos = line.find(': ')
+        if action_pos != -1:
+            action_end = line[action_pos+2:].find(' ')
+            action = line[action_pos+2:action_pos+2+action_end]
+            if action == 'raises':
+                name = line[:action_pos]
+                if name not in db:
+                    parenthesis_start = name.find(' (')
+                    name = name[:parenthesis_start]
+                db[name]['PFR_hands']=db[name]['PFR_hands'] + 1
+
+###############################################################################
+# calculate_AFq_hands calculates the amount of hands for each player, when    #
+# a player showed aggression in the post flop and played passively in the     #
+# post flop stage of the current hand(AFq stands for aggression frequency).   #
+# Aggression frquency is calculated by dividing the amount of post flop raises#
+# and bets by the amount of post flop raises, bets, calls and folds.          #
+###############################################################################
+
+def calculate_AFq_hands(flop, turn, river, db):
+    phase_of_game = [flop, turn, river]
+    for phase in phase_of_game:
+        lines = phase.splitlines()
+        for line in lines:
+            action_pos = line.find(': ')
+            if action_pos != -1:
+                action_end = line[action_pos+2:].find(' ')
+                action = line[action_pos+2:action_pos+2+action_end]
+                if action == 'raises' or action == 'bets':
+                    name = line[:action_pos]
+                    if name not in db:
+                        parenthesis_start = name.find(' (')
+                        name = name[:parenthesis_start]
+                    db[name]['POST_FLOP_AGG']=db[name]['POST_FLOP_AGG'] + 1
+                if action == 'raises' or action == 'bets' or action == 'calls' or action == 'folds':
+                    name = line[:action_pos]
+                    if name not in db:
+                        parenthesis_start = name.find(' (')
+                        name = name[:parenthesis_start]
+                    db[name]['POST_FLOP_PASSIVE']=db[name]['POST_FLOP_PASSIVE'] + 1
+
+###############################################################################
+# calculate_WTSD_hands calculates the amount of hands for each player, when   #
+# a player went to show down(hence the name - WTSD).                          #
+###############################################################################
+    
+def calculate_WTSD_hands(show,db):
+    lines = show.splitlines()
+    for line in lines:
+        action_pos = line.find(': ')
+        if action_pos != -1:
+            name = line[:action_pos]
+            if name not in db:
+                parenthesis_start = name.find(' (')
+                name = name[:parenthesis_start]
+            db[name]['WTSD_HANDS'] = db[name]['WTSD_HANDS'] + 1
+
+###############################################################################
+# calculate_WTFLOP_hands calculates the amount of hands for each player, when #
+# a player went to flop.                                                      #
+###############################################################################
+
+def calculate_WTFLOP_hands(flop, db):
+    lines = flop.splitlines()
+    for line in lines:
+        action_pos = line.find(': ')
+        if action_pos != -1:
+            name = line[:action_pos]
+            if name not in db:
+                parenthesis_start = name.find(' (')
+                name = name[:parenthesis_start]
+            db[name]['WTFLOP_HANDS'] = db[name]['WTFLOP_HANDS'] + 1
+
+###############################################################################
+# calculate_CBET_hands calculates the amount of hands for each player, when   #
+# a payer made a continuation bet.                                            #
+###############################################################################
+
+def calculate_CBET_hands(preflop, flop, db):
+    preflop_raise = last_to_raise_pre_flop(preflop, flop, db)
+    post_flop_bet = first_to_bet_post_flop(flop, db)
+    if preflop_raise == post_flop_bet:
+        db[preflop_raise]['CBET_HANDS'] = db[preflop_raise]['CBET_HANDS'] + 1
+
+###############################################################################
+# This procedure finds which player was the last to raise in the preflop phase#
+# of the game, it also calculates how many times each player was the last to  #
+# raise in the preflop phase of the game.                                     #                                                                #
+###############################################################################
+
+def last_to_raise_pre_flop(preflop, flop, db):
+    last_to_raise = 'n/a'
+    lines = preflop.splitlines()
+    for line in lines:
+        action_pos = line.find(': ')
+        if action_pos != -1:
+                action_end = line[action_pos+2:].find(' ')
+                action = line[action_pos+2:action_pos+2+action_end]
+                if action == 'raises':
+                    name = line[:action_pos]
+                    if name not in db:
+                        parenthesis_start = name.find(' (')
+                        name = name[:parenthesis_start]
+                    last_to_raise = name
+    if last_to_raise != 'n/a' and flop != 'none':
+        db[last_to_raise]['last_to_raise_preflop'] = db[last_to_raise]['last_to_raise_preflop'] + 1
+    return last_to_raise
+
+###############################################################################
+# This procedure finds which player was the first one to bet in the flop phase#
+# of the game.                                                                #
+###############################################################################
+
+def first_to_bet_post_flop(flop, db):
+    lines = flop.splitlines()
+    for line in lines:
+        action_pos = line.find(': ')
+        if action_pos != -1:
+                action_end = line[action_pos+2:].find(' ')
+                action = line[action_pos+2:action_pos+2+action_end]
+                if action == 'bets' or action == 'raises':
+                    name = line[:action_pos]
+                    if name not in db:
+                        parenthesis_start = name.find(' (')
+                        name = name[:parenthesis_start]
+                    return name
+    return 'none1'
+
+###############################################################################
+# won_showdown calculates the amount of hands for each player, when a player  #
+# won the pot or at least tied(which equals to winning or at least not loosing#
+# money).                                                                     #
+###############################################################################
+                    
+def won_showdown(show, db):
+    if show != 'none':
+        names = []
+        lines = show.splitlines()
+        for line in lines:
+            action_pos = line.find(': ')
+            if action_pos == -1:
+                action_pos = line.find(' collected')
+                if action_pos != -1:
+                    action_end = line[action_pos+1:].find(' ')
+                    action = line[action_pos+1:action_pos+1+action_end]
+#                    print filename
+#                    print hand
+#                    print action
+#                    raw_input()
+                    if action == 'collected':
+                        name = line[:action_pos]
+                        if name not in db:
+                            parenthesis_start = name.find(' (')
+                            name = name[:parenthesis_start]
+                        names.append(name)
+        for entry in names:
+            db[entry]['won_showdown'] = db[entry]['won_showdown'] + 1
+
+###############################################################################
+# This procedure, whie using statistics collected, performs the calculations  #
+# required to get the percentages of every statistic(useful ones).            #
+###############################################################################
+
+def calculations(db):
+    for name in db:
+        hands_played = db[name]['hands_played']
+        hands_played = hands_played + 0.0 # This converts an integer to a real number
+        VPIP_hands = db[name]['VPIP_hands']
+        VPIP_hands = VPIP_hands + 0.0
+        db[name]['VPIP'] = (VPIP_hands/hands_played)*100
+        PFR_hands = db[name]['PFR_hands']
+        PFR_hands = PFR_hands + 0.0
+        db[name]['PFR'] = (PFR_hands/hands_played)*100
+        POST_FLOP_AGG = db[name]['POST_FLOP_AGG']
+        POST_FLOP_PASSIVE = db[name]['POST_FLOP_PASSIVE']
+        POST_FLOP_AGG = POST_FLOP_AGG + 0.0
+        POST_FLOP_PASSIVE = POST_FLOP_PASSIVE + 0.0
+        if POST_FLOP_PASSIVE != 0.0:
+            db[name]['AFq'] = (POST_FLOP_AGG/POST_FLOP_PASSIVE) * 100
+        WTSD_HANDS = db[name]['WTSD_HANDS'] + 0.0
+        WTFLOP_HANDS = db[name]['WTFLOP_HANDS'] + 0.0
+        if WTFLOP_HANDS != 0.0:
+            db[name]['WTSD_PERCENTAGE'] = WTSD_HANDS/WTFLOP_HANDS * 100
+        CBET_HANDS = db[name]['CBET_HANDS'] +0.0
+        last_to_raise_preflop = db[name]['last_to_raise_preflop'] + 0.0
+        if last_to_raise_preflop != 0:
+            db[name]['CBET'] = (CBET_HANDS/last_to_raise_preflop) * 100
+        won_showdown = db[name]['won_showdown'] + 0.0
+        if WTSD_HANDS != 0:
+            db[name]['won_showdown_percentage'] = (won_showdown/WTSD_HANDS) * 100
+    return db
+
+###############################################################################
+# This is a cycle where the user enters names of the players he/she is        #
+# interested in and gets the statistics of thet player if the player is in the#
+# database.                                                                   #
+###############################################################################
+
+def user_cycle(db):
+    IO = 1
+    while IO != 0:
+        print 'Enter the name of the player or "exit" to exit the current gametype: ',
+        name = raw_input()
+        if name in db:
+            print 'Statistics for '+name+':'
+            print 'Hands played with this player: '+str(db[name]['hands_played'])
+            print 'Voluntarily puts money into pot: '+str(db[name]['VPIP'])+'%'
+            print 'Preflop raise: '+str(db[name]['PFR'])+'%'
+            print 'Continuation bets: '+str(db[name]['CBET'])+'%'
+            print 'Aggression frequency: '+str(db[name]['AFq'])+'%'
+            print 'Went to show down: '+str(db[name]['WTSD_PERCENTAGE'])+'%'
+            print 'Won show down: '+str(db[name]['won_showdown_percentage'])+'%'
+            print ''
+        elif name == 'exit' or name == '"exit"':
+            clear = lambda: os.system('cls')
+            clear()
+            IO = 0
+        else:
+            print 'The name '+name+' is not found in your database...'
+            print 'Press ENTER to continue...'
+            raw_input()
+    return
+
+###############################################################################
+# This is the main instance of the program. It runs all the procedures that   #
+# are required for the program to run properly.                               #
+###############################################################################
+
+def main_instance():
+    IO = 1
+    while IO != 0:
+        print 'Enter gametype(either zoomgames, tournaments or all) or "exit" to exit\nthe program: ',
+        gametype = raw_input()
+        sws = time.clock()
+        if gametype == 'tournaments' or gametype == 'zoomgames' or gametype == 'all':
+            print 'Loading filelist...'
+            filelist = reload_filelist()
+            print 'Filelist containing '+str(len(filelist[gametype]))+' files loaded...'
+            db, number_of_hands = build_db(filelist, gametype)
+            swe = time.clock()
+            sw = swe - sws
+            print 'Database loaded '+str(number_of_hands)+' hands in '+str(sw)+' seconds at '+str(int((number_of_hands + 0.0)/sw))+' hands per second...'
+            db = calculations(db)
+            print 'Database calculations performed...'
+            print 'Press ENTER to continue...'
+            raw_input()
+            print 'Initializing interface...'
+            time.sleep(1)
+            clear = lambda: os.system('cls')
+            clear()
+            user_cycle(db)
+        elif gametype == 'exit' or gametype == '"exit"':
+            IO = 0
+        else:
+            print gametype+' is a non-existant gametype, press ENTER to continue...'
+            raw_input()
+            clear = lambda: os.system('cls')
+            clear()
+                
+    return
+    
+
+###############################################################################
+# This runs the program.                                                      #
+###############################################################################
+
+main_instance()
+
+
+
+
